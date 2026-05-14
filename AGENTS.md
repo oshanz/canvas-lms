@@ -1,6 +1,6 @@
-# AGENTS.md
+# CLAUDE.md
 
-AI coding assistant guidance for Canvas LMS.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Quick Start
 
@@ -17,66 +17,161 @@ yarn build:watch                     # Frontend dev mode
 | **Build** | `yarn build` (all), `yarn build:watch` (dev) |
 | **Test JS** | `yarn test`, `yarn test:vitest`, `yarn test:watch` |
 | **Test Ruby** | `bin/rspec` |
-| **Lint** | `yarn lint` (JS), `bin/rubocop` (Ruby), `yarn check:biome` |
+| **Lint JS** | `yarn lint` (oxlint), `yarn check:biome` |
+| **Lint Ruby** | `bin/rubocop` |
 | **Type Check** | `yarn check:ts` |
 | **Webpack** | `yarn webpack-development` (build), `yarn webpack` (watch) |
+| **GraphQL Codegen** | `yarn graphql:codegen` |
+| **i18n Check** | `yarn i18n:check` |
+
+> Any commands that use yarn, rake, bundle, or rails must be run inside the web container.
 
 ## Project Structure
 
-- `ui/` - React components & shared packages
-- `app/` - Rails MVC (controllers, models, views)
-- `packages/` - Shared NPM packages
-- `gems/plugins/` - Canvas plugins (account_reports, analytics, etc.)
-- `lib/` - Ruby business logic
+```
+ui/
+├── boot/          - App initialization and routing
+├── features/      - Feature-specific components (232+ features)
+├── shared/        - Reusable components and utilities (@canvas/foo)
+└── engine/        - Core UI engine
+
+app/               - Rails MVC (controllers, models, views)
+lib/               - Ruby business logic
+gems/plugins/      - Canvas plugins (account_reports, analytics, etc.)
+config/feature_flags/ - Feature flag YAML definitions
+packages/          - Shared NPM packages (@instructure/foo)
+```
+
+## Frontend Architecture
+
+### Import Conventions
+- `@canvas/foo` → `ui/shared/foo`
+- `@instructure/foo` → `packages/foo` (or npm)
+- Feature code → `ui/features/<feature_name>/`
+
+### Core Stack
+- **React** (function components + hooks only — no class components)
+- **TypeScript** (all new code; avoid `any`, use `unknown` if truly unknown)
+- **InstUI** (`@instructure/ui-*`) — use InstUI components before writing custom CSS
+- **Apollo Client** — GraphQL queries
+- **Tanstack Query** — REST server state
+- **React Router** — client-side routing
+
+### What to Avoid
+- jQuery, Backbone, class components, `React.FC` type, default exports for utilities
+- CSS modules or inline styles; minimize custom CSS (use InstUI props)
+- Bare `fetch`, Axios, or `$.ajaxJSON` — always use `doFetchApi` for REST calls
+- `any` TypeScript type
+
+## Testing
+
+### JS Tests (Vitest)
+- Place `__tests__/` folders next to the code being tested
+- Run specific tests: `yarn test path/to/test`
+- Run first 10%: `yarn test --shard=1/10`
+- Coverage: `yarn test:coverage`
+
+### RSpec Tests
+- Run specific tests: `bin/rspec path/to/spec.rb:<line_number>`
+
+### JS Testing Guidelines (see `doc/ui/testing_javascript.md`)
+- Use `@testing-library/react`; destructure `get`/`find` from `render()` (not `screen`)
+- Use `userEvent` over `fireEvent`
+- Use MSW for network mocking — **do not mock `doFetchApi` directly**
+- Use `import fakeENV from '@canvas/test-utils/fakeENV'` to test `window.ENV`
+- **Never use `byRole` queries** (`getByRole`, `findByRole`, `queryByRole`, etc.) — they have significant performance overhead due to expensive visibility checks. Use `byText`, `byLabelText`, or `byTestId` instead.
+- Keep test files under 300 lines
 
 ## Key Concepts
 
-- **Multi-tenancy** via Account hierarchies
-- **Database sharding** with Switchman gem
-- **Plugin system** in `gems/plugins/`
-- **LTI integrations** for external tools
-- **Brandable CSS** theming (`yarn build:css`)
-- **Feature flags** for gradual rollouts
+### Multi-tenancy & Sharding
+- Account hierarchies provide multi-tenancy
+- Database sharding via the Switchman gem
 
-## Docker Tips
+### Feature Flags
+Defined in `config/feature_flags/*.yml`. States:
+- `hidden` — only site admins can see/enable
+- `allowed` — account admins can toggle
+- `allowed_on` — enabled by default
 
-- Any commands that use yarn, rake, bundle, or rails should be run inside the web container.
-- Update packages: Edit package.json, run `docker_yarn` function
-- Access Rails console: `docker compose run --rm web rails c`
-- Database operations run inside containers
+**Ruby usage:**
+```ruby
+@account.feature_enabled?(:feature_name)
+```
 
-## Testing Docs
+**JS/TS usage:**
+```javascript
+if (ENV.FEATURES?.feature_name) { ... }
+```
 
-- JS testing guide: `doc/ui/testing_javascript.md`
-- Run specific frontend tests: `yarn test path/to/test`
-- Run specific RSpec tests: `bin/rspec path/to/test:<line_number>`
-- Coverage: `yarn test:coverage`
+New flags should start as `state: hidden` and use a descriptive snake_case name.
+
+### Internationalization (i18n)
+```tsx
+import {useScope as createI18nScope} from '@canvas/i18n'
+const I18n = createI18nScope('feature_name')
+
+I18n.t('Submit')
+I18n.t('Welcome, %{name}', {name: userName})
+I18n.t({one: '1 item', other: '%{count} items'}, {count: itemCount})
+```
+
+### GraphQL Fragments
+Fragment names must be **globally unique** — always prefix with the feature name:
+```tsx
+// Bad:  fragment Assignment on Assignment { ... }
+// Good: fragment InboxAssignment on Assignment { ... }
+```
+Run `yarn graphql:codegen` after modifying GraphQL files. Duplicate fragment names will cause codegen to fail.
+
+### Brandable CSS
+Theme compilation: `yarn build:css`. Uses SCSS in `app/stylesheets/`.
+
+## Adding a New Feature
+
+### 1. Frontend structure
+```
+ui/features/my_feature/
+├── components/
+│   ├── MyFeature.tsx
+│   └── __tests__/MyFeature.test.tsx
+├── routes/MyFeatureRoutes.tsx
+├── hooks/useMyFeature.ts
+└── types.ts
+```
+
+### 2. Register routes
+```tsx
+// ui/boot/initializers/router.tsx
+import {MyFeatureRoutes} from '../../features/my_feature/routes/MyFeatureRoutes'
+```
+
+### 3. Set ENV in controller
+```ruby
+js_env({ MY_FLAG: @context.feature_enabled?(:my_flag) })
+```
 
 ## Git Commit Guidelines
 
-- Keep each line in commit messages under 60 characters
-- Keep it short
-- Provide the why behind the change
-- ChangeId is generated by git hooks (don't change or remove it)
-- The available JIRA verbs are: fixes, closes, and refs
-  - use `fixes` for bugs
-  - use `closes` for tickets fully resolved by this commit
-  - use `refs` otherwise
-- Follow the patterns of this example:
+- Keep each line under 60 characters
+- ChangeId is generated by git hooks — don't change or remove it
+- JIRA verbs: `fixes` (bugs), `closes` (fully resolved), `refs` (otherwise)
+
 ```
-a summary of the commit change
+Short summary of change
 
-a more detailed description of the change, if neccesary
+More detail if necessary
 
-refs <JIRA issue key>
-flag=<flag_name or none>
+refs JIRA-123
+flag=feature_flag_name or none
 
 test plan:
-- steps to set up the situation
-- and test the change to make sure it's fixed
+- steps to reproduce / verify
 ```
 
-## Final Notes
+## Sub-directory CLAUDE.md Files
 
-Some users may run Canvas differently, so consider these useful default suggestions for
-starting and interacting with Canvas if no other methods have been specified.
+More detailed guidance exists in:
+- `ui/CLAUDE.md` — full frontend development guide
+- `config/feature_flags/CLAUDE.md` — feature flag reference
+- `ui/features/assignment_edit/CLAUDE.md` — assignment edit Backbone/React architecture
